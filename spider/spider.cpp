@@ -1,147 +1,124 @@
-#include <boost/beast.hpp>
-#include <boost/asio.hpp>
+#include "spider.h"
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/version.hpp>
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/locale.hpp>
-#include <pqxx/pqxx>
-#include <thread>
-#include <queue>
-#include <mutex>
-#include <set>
 #include <regex>
 #include <iostream>
-#include <fstream>
-#include <sstream>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/ini_parser.hpp>
 
-using namespace std;
 namespace http = boost::beast::http;
-namespace asio = boost::asio;
+namespace net = boost::asio;
+using tcp = net::ip::tcp;
 
-struct Config {
-    string db_host;
-    int db_port;
-    string db_name;
-    string db_user;
-    string db_password;
-    string start_url;
-    int recursion_depth;
-    int server_port;
-};
+Spider::Spider(const Config& config, Database& db) : config_(config), db_(db) {}
 
-Config read_config(const string& filename) {
-    Config config;
-    boost::property_tree::ptree pt;
-    boost::property_tree::ini_parser::read_ini(filename, pt);
+void Spider::start() {
+    std::queue<std::pair<std::string, int>> urls;
+    urls.push({ config_.start_url, 0 });
 
-    config.db_host = pt.get<string>("database.host");
-    config.db_port = pt.get<int>("database.port");
-    config.db_name = pt.get<string>("database.dbname");
-    config.db_user = pt.get<string>("database.user");
-    config.db_password = pt.get<string>("database.password");
-    config.start_url = pt.get<string>("spider.start_url");
-    config.recursion_depth = pt.get<int>("spider.recursion_depth");
-    config.server_port = pt.get<int>("search_server.port");
+    while (!urls.empty()) {
+        auto [url, depth] = urls.front();
+        urls.pop();
 
-    return config;
-}
+        if (depth > config_.recursion_depth || visited_.find(url) != visited_.end()) {
+            continue;
+        }
 
-class Spider {
-public:
-    Spider(const Config& config)
-        : config_(config), db_conn_str_("dbname=" + config.db_name + " user=" + config.db_user + " password=" + config.db_password) {
-        db_conn_ = make_shared<pqxx::connection>(db_conn_str_);
-    }
+        visited_.insert(url);
 
-    void start() {
-        queue<pair<string, int>> urls;
-        urls.push({ config_.start_url, 0 });
-        set<string> visited;
-        visited.insert(config_.start_url);
-
-        while (!urls.empty()) {
-            auto [url, depth] = urls.front();
-            urls.pop();
-
-            if (depth > config_.recursion_depth) continue;
-
-            // Fetch and parse the page
-            string content = fetch_page(url);
-            vector<string> links = extract_links(content);
+        std::string content = fetch_page(url);
+        if (!content.empty()) {
             index_page(url, content);
 
-            // Add new links to the queue
+            std::vector<std::string> links = extract_links(content);
             for (const auto& link : links) {
-                if (visited.find(link) == visited.end()) {
-                    urls.push({ link, depth + 1 });
-                    visited.insert(link);
-                }
+                urls.push({ link, depth + 1 });
             }
         }
     }
+}
 
-private:
-    Config config_;
-    string db_conn_str_;
-    shared_ptr<pqxx::connection> db_conn_;
+std::string Spider::fetch_page(const std::string& url) {
+    try {
+        net::io_context ioc;
+        tcp::resolver resolver(ioc);
+        auto const results = resolver.resolve(url, "80");
+        tcp::socket socket(ioc);
+        net::connect(socket, results.begin(), results.end());
 
-    string fetch_page(const string& url) {
-        // Implement HTTP client to fetch page content using Boost Beast
-        // ...
-        return "<html>...</html>"; // placeholder
+        http::request<http::string_body> req{ http::verb::get, url, 11 };
+        req.set(http::field::host, url);
+        req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+
+        http::write(socket, req);
+
+        boost::beast::flat_buffer buffer;
+        http::response<http::dynamic_body> res;
+        http::read(socket, buffer, res);
+
+        return boost::beast::buffers_to_string(res.body().data());
+    }
+    catch (std::exception& e) {
+        std::cerr << "Error fetching page: " << e.what() << std::endl;
+        return "";
+    }
+}
+
+std::vector<std::string> Spider::extract_links(const std::string& content) {
+    std::vector<std::string> links;
+    std::regex link_regex(R"(<a\s+href=["']([^"']+)["'])");
+    std::smatch match;
+
+    std::string::const_iterator search_start(content.cbegin());
+    while (std::regex_search(search_start, content.cend(), match, link_regex)) {
+        links.push_back(match[1]);
+        search_start = match.suffix().first;
     }
 
-    vector<string> extract_links(const string& content) {
-        vector<string> links;
-        regex link_regex("<a href=\"(.*?)\"");
-        smatch match;
-        string::const_iterator search_start(content.cbegin());
+    return links;
+}
 
-        while (regex_search(search_start, content.cend(), match, link_regex)) {
-            links.push_back(match[1]);
-            search_start = match.suffix().first;
-        }
+void Spider::index_page(const std::string& url, const std::string& content) {
+    try {
+        std::string text = boost::locale::to_lower(content);
+        text = std::regex_replace(text, std::regex("<[^>]*>"), " ");
+        text = std::regex_replace(text, std::regex("[^\\w\\s]"), " ");
 
-        return links;
-    }
-
-    void index_page(const string& url, const string& content) {
-        string text = clean_html(content);
-        map<string, int> word_freq = analyze_text(text);
-
-        pqxx::work txn(*db_conn_);
-        // Insert document and word frequency into the database
-        // ...
-        txn.commit();
-    }
-
-    string clean_html(const string& html) {
-        // Remove HTML tags, punctuation, and convert to lowercase
-        string text = boost::locale::to_lower(html);
-        text = regex_replace(text, regex("<[^>]*>"), " ");
-        text = regex_replace(text, regex("[^\\w\\s]"), " ");
-        return text;
-    }
-
-    map<string, int> analyze_text(const string& text) {
-        map<string, int> word_freq;
-        stringstream ss(text);
-        string word;
-
-        while (ss >> word) {
+        std::map<std::string, int> word_freq;
+        std::istringstream iss(text);
+        std::string word;
+        while (iss >> word) {
             if (word.length() >= 3 && word.length() <= 32) {
                 word_freq[word]++;
             }
         }
 
-        return word_freq;
+        db_.save_document(url, content);
+
+        {
+            pqxx::work txn(db_.conn());
+            pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
+            if (r.empty()) {
+                std::cerr << "No document found with URL: " << url << std::endl;
+                return;
+            }
+            int document_id = r[0][0].as<int>();
+
+            for (const auto& [word, freq] : word_freq) {
+                db_.save_word_frequency(document_id, word, freq);
+            }
+
+            txn.commit();
+        }
     }
-};
-
-int main() {
-    Config config = read_config("../config/config.ini");
-
-    Spider spider(config);
-    spider.start();
-
-    return 0;
+    catch (const pqxx::sql_error& e) {
+        std::cerr << "SQL error: " << e.what() << std::endl;
+        std::cerr << "Query was: " << e.query() << std::endl;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Exception: " << e.what() << std::endl;
+    }
 }
+
