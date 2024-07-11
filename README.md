@@ -5,5 +5,5 @@ This is a simple search engine project consisting of two main components: the Sp
 ## Project Structure
 
 - `spider/`: Contains the source code for the web crawler.
-- `search_server/`: Contains the source code for the search server.
+- `database/`: Contains the source code for the database.
 - `config/`: Contains the configuration files.
