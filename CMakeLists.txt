@@ -1,43 +1,40 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.20)
 
 project(SearchEngine)
 
-# Установка стандарта C++
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Найти пакеты Boost и PostgreSQL
+# Укажите путь к vcpkg toolchain
+set(CMAKE_TOOLCHAIN_FILE "C:/Users/alexr/Desktop/Search_Engine/vcpkg/scripts/buildsystems/vcpkg.cmake")
+
+# Найти пакеты Boost и libpqxx
 find_package(Boost REQUIRED COMPONENTS system filesystem regex locale)
-find_package(PostgreSQL REQUIRED)
+find_package(libpqxx CONFIG REQUIRED)
 
 # Установка путей к заголовочным файлам и библиотекам Boost
 include_directories(${Boost_INCLUDE_DIRS})
 link_directories(${Boost_LIBRARY_DIRS})
 
-# Установка путей к заголовочным файлам и библиотекам PostgreSQL
-include_directories(${PostgreSQL_INCLUDE_DIRS})
-link_directories(${PostgreSQL_LIBRARY_DIRS})
-
 # Установка путей к исходным файлам и заголовочным файлам
 set(SOURCES
     main.cpp
-    config/config.cpp
     config/config.h
-    database/database.cpp
+    config/config.cpp
     database/database.h
-    spider/spider.cpp
+    database/database.cpp
     spider/spider.h
+    spider/spider.cpp
 )
 
 # Создание исполняемого файла
 add_executable(SearchEngine ${SOURCES})
 
-# Линковка с библиотеками Boost и PostgreSQL
-target_link_libraries(SearchEngine 
-    ${Boost_FILESYSTEM_LIBRARY}
-    ${Boost_SYSTEM_LIBRARY}
-    ${Boost_REGEX_LIBRARY}
-    ${Boost_LOCALE_LIBRARY}
-    ${PostgreSQL_LIBRARIES}
-    pqxx
+# Линковка с библиотеками Boost и libpqxx
+target_link_libraries(SearchEngine PRIVATE
+    Boost::system
+    Boost::filesystem
+    Boost::regex
+    Boost::locale
+    libpqxx::pqxx
 )
