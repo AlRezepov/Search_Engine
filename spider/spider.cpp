@@ -144,8 +144,8 @@ void Spider::worker_thread() {
         }
 
         try {
-            pqxx::work txn(db_.conn()); // Создаем транзакцию
-            db_.save_document(url, content, txn); // Передаем транзакцию в save_document
+            pqxx::work txn(db_.conn());
+            db_.save_document(url, content, txn);
             pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
             if (r.empty()) {
                 std::cerr << "No document found with URL: " << url << std::endl;
@@ -162,9 +162,8 @@ void Spider::worker_thread() {
                 }
             }
             for (const auto& [word, freq] : word_freq) {
-                db_.save_word_frequency(document_id, word, freq, txn); // Передаем транзакцию в save_word_frequency
-            }
-            txn.commit(); // Коммитим транзакцию после сохранения всех данных
+                db_.save_word_frequency(document_id, word, freq, txn); 
+            txn.commit();
         }
         catch (const std::exception& e) {
             std::cerr << "Exception while indexing page: " << e.what() << std::endl;
@@ -221,7 +220,7 @@ std::string Spider::fetch_page(const std::string& url) {
         if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
             auto location = res[http::field::location];
             if (!location.empty()) {
-                return fetch_page(std::string(location)); // Преобразование location в std::string
+                return fetch_page(std::string(location));
             }
             else {
                 std::cerr << "Redirected without a new location" << std::endl;
@@ -235,7 +234,7 @@ std::string Spider::fetch_page(const std::string& url) {
         }
 
         std::string page_content = boost::beast::buffers_to_string(res.body().data());
-        std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl; // Показать первые 500 символов для отладки
+        std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl; // первые 500 символов для отладки
         return page_content;
     }
     catch (std::exception& e) {

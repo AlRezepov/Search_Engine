@@ -32,13 +32,13 @@ private:
     std::set<std::string> visited_;
     std::queue<std::pair<std::string, int>> urls_;
     std::mutex queue_mutex_;
-    std::mutex visited_mutex_; // Добавляем объявление visited_mutex_
+    std::mutex visited_mutex_;
     std::condition_variable cv_;
     bool stop_ = false;
 
     boost::asio::io_context ioc_;
     boost::asio::ssl::context ssl_ctx_;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_; // Новый член класса
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
     std::vector<std::thread> thread_pool_; // Пул потоков
     std::atomic<int> active_threads_{ 0 };
 
