@@ -10,8 +10,7 @@ public:
 
     void save_document(const std::string& url, const std::string& content, pqxx::work& txn);
     void save_word_frequency(int document_id, const std::string& word, int frequency, pqxx::work& txn);
-
-    pqxx::connection& conn() { return conn_; }
+    pqxx::connection& conn();
 
 private:
     pqxx::connection conn_;

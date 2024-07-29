@@ -13,6 +13,7 @@
 #include <mutex>
 #include <queue>
 #include <condition_variable>
+#include <execution>
 
 namespace http = boost::beast::http;
 namespace net = boost::asio;
@@ -55,6 +56,14 @@ void Spider::start() {
             });
     }
 
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        cv_.wait(lock, [this]() { return urls_.empty() && active_threads_ == 0; });
+    }
+
+    stop_ = true;
+    cv_.notify_all();
+
     for (auto& thread : thread_pool_) {
         if (thread.joinable()) {
             thread.join();
@@ -65,6 +74,7 @@ void Spider::start() {
 }
 
 void Spider::worker_thread() {
+    active_threads_++;
     while (true) {
         std::pair<std::string, int> task;
 
@@ -73,6 +83,10 @@ void Spider::worker_thread() {
             cv_.wait(lock, [this]() { return !urls_.empty() || stop_; });
 
             if (stop_ && urls_.empty()) {
+                active_threads_--;
+                if (active_threads_ == 0) {
+                    cv_.notify_all();
+                }
                 return; // Завершаем поток, если stop_ установлен и нет URL для обработки
             }
 
@@ -101,7 +115,7 @@ void Spider::worker_thread() {
             visited_.insert(url);
         }
 
-        std::string content = fetch_page(url);
+        std::string content = fetch_page(ensure_scheme(url));
         if (content.empty()) {
             std::cerr << "Fetched content is empty for URL: " << url << std::endl;
             continue;
@@ -110,33 +124,53 @@ void Spider::worker_thread() {
         std::cout << "Processing content for URL: " << url << std::endl;
         std::cout << "Content snippet: " << content.substr(0, 1000) << "..." << std::endl;
 
-        std::vector<std::string> links;
-        try {
-            links = extract_links(content);
-        }
-        catch (const std::exception& e) {
-            std::cerr << "Exception while extracting links: " << e.what() << std::endl;
-            continue;
-        }
-
-        for (const auto& link : links) {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            if (visited_.find(link) == visited_.end() && depth + 1 <= config_.recursion_depth) {
-                urls_.emplace(link, depth + 1);
-                cv_.notify_one();
+        if (depth < config_.recursion_depth) {
+            std::vector<std::string> links;
+            try {
+                links = extract_links(content);
             }
+            catch (const std::exception& e) {
+                std::cerr << "Exception while extracting links: " << e.what() << std::endl;
+                continue;
+            }
+
+            std::for_each(std::execution::par, links.begin(), links.end(), [this, depth](const std::string& link) {
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                if (visited_.find(link) == visited_.end()) {
+                    urls_.emplace(link, depth + 1);
+                    cv_.notify_one();
+                }
+                });
         }
 
         try {
-            index_page(url, content);
+            pqxx::work txn(db_.conn()); // Создаем транзакцию
+            db_.save_document(url, content, txn); // Передаем транзакцию в save_document
+            pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
+            if (r.empty()) {
+                std::cerr << "No document found with URL: " << url << std::endl;
+                txn.commit();
+                continue;
+            }
+            int document_id = r[0][0].as<int>();
+            std::map<std::string, int> word_freq;
+            std::istringstream iss(content);
+            std::string word;
+            while (iss >> word) {
+                if (word.length() >= 3 && word.length() <= 32) {
+                    word_freq[word]++;
+                }
+            }
+            for (const auto& [word, freq] : word_freq) {
+                db_.save_word_frequency(document_id, word, freq, txn); // Передаем транзакцию в save_word_frequency
+            }
+            txn.commit(); // Коммитим транзакцию после сохранения всех данных
         }
         catch (const std::exception& e) {
             std::cerr << "Exception while indexing page: " << e.what() << std::endl;
         }
     }
 }
-
-
 
 std::string Spider::fetch_page(const std::string& url) {
     try {
@@ -184,6 +218,17 @@ std::string Spider::fetch_page(const std::string& url) {
 
         http::read(stream, buffer, res);
 
+        if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
+            auto location = res[http::field::location];
+            if (!location.empty()) {
+                return fetch_page(std::string(location)); // Преобразование location в std::string
+            }
+            else {
+                std::cerr << "Redirected without a new location" << std::endl;
+                return "";
+            }
+        }
+
         if (res.result() != http::status::ok) {
             std::cerr << "HTTP request failed: " << res.result_int() << " " << res.reason() << std::endl;
             return "";
@@ -198,8 +243,6 @@ std::string Spider::fetch_page(const std::string& url) {
         return "";
     }
 }
-
-
 
 std::vector<std::string> Spider::extract_links(const std::string& content) {
     std::vector<std::string> links;
@@ -229,78 +272,9 @@ std::vector<std::string> Spider::extract_links(const std::string& content) {
     return links;
 }
 
-
-
-void Spider::index_page(const std::string& url, const std::string& content) {
-    try {
-        if (content.empty()) {
-            std::cerr << "Empty content for URL: " << url << std::endl;
-            return;
-        }
-
-        // Инициализация локали
-        boost::locale::generator gen;
-        std::locale loc = gen("");
-        std::locale::global(loc);
-        std::cout.imbue(loc);
-
-        // Преобразование строки в UTF-8
-        std::string utf8_content = boost::locale::conv::to_utf<char>(content, "UTF-8");
-        std::string text = boost::locale::to_lower(utf8_content);
-
-        // Удаление HTML тегов и специальных символов
-        text = std::regex_replace(text, std::regex("<[^>]*>"), " ");
-        text = std::regex_replace(text, std::regex("[^\\w\\s]"), " ");
-
-        std::map<std::string, int> word_freq;
-        std::istringstream iss(text);
-        std::string word;
-        while (iss >> word) {
-            if (word.length() >= 3 && word.length() <= 32) {
-                word_freq[word]++;
-            }
-        }
-
-        pqxx::work txn(db_.conn());
-        db_.save_document(url, content, txn);
-        std::cout << "Document saved for URL: " << url << std::endl;
-
-        pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
-        if (r.empty()) {
-            std::cerr << "No document found with URL: " << url << std::endl;
-            return;
-        }
-
-        int document_id;
-        try {
-            document_id = r[0][0].as<int>();
-        }
-        catch (const std::bad_cast& e) {
-            std::cerr << "Bad cast error: " << e.what() << std::endl;
-            return;
-        }
-
-        std::cout << "Document ID: " << document_id << std::endl;
-
-        for (const auto& [word, freq] : word_freq) {
-            db_.save_word_frequency(document_id, word, freq, txn);
-        }
-
-        txn.commit();
+std::string Spider::ensure_scheme(const std::string& url) {
+    if (url.find("http://") == 0 || url.find("https://") == 0) {
+        return url;
     }
-    catch (const pqxx::sql_error& e) {
-        std::cerr << "SQL error: " << e.what() << std::endl;
-        std::cerr << "Query was: " << e.query() << std::endl;
-    }
-    catch (const std::bad_cast& e) {
-        std::cerr << "Bad cast error: " << e.what() << std::endl;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Exception: " << e.what() << std::endl;
-    }
+    return "http://" + url;
 }
-
-
-
-
-

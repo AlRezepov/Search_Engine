@@ -58,7 +58,6 @@ void create_tables(Database& db) {
     }
 }
 
-
 int main() {
     try {
         std::string config_path = "C:/Users/alexr/Desktop/Search_Engine/config/config.ini";
@@ -77,9 +76,6 @@ int main() {
 
         spider.start();
         std::cout << "Spider finished." << std::endl;
-
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-
     }
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;

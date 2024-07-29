@@ -24,3 +24,7 @@ void Database::save_word_frequency(int document_id, const std::string& word, int
     }
     txn.exec_params("INSERT INTO search_engine.word_frequencies (document_id, word_id, frequency) VALUES ($1, $2, $3) ON CONFLICT (document_id, word_id) DO NOTHING", document_id, word_id, frequency);
 }
+
+pqxx::connection& Database::conn() {
+    return conn_;
+}
