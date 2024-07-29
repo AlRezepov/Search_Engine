@@ -75,8 +75,11 @@ int main() {
         std::cout << "Starting spider..." << std::endl;
         Spider spider(config, db);
 
-        /*spider.start();
-        std::cout << "Spider finished." << std::endl;*/
+        spider.start();
+        std::cout << "Spider finished." << std::endl;
+
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
     }
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
