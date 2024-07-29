@@ -13,7 +13,7 @@
 #include <mutex>
 #include <queue>
 #include <condition_variable>
-#include <execution>
+#include <execution>  // Для std::execution::par
 
 namespace http = boost::beast::http;
 namespace net = boost::asio;
@@ -72,6 +72,7 @@ void Spider::start() {
 
     std::cout << "Spider finished." << std::endl;
 }
+
 
 void Spider::worker_thread() {
     active_threads_++;
@@ -144,32 +145,14 @@ void Spider::worker_thread() {
         }
 
         try {
-            pqxx::work txn(db_.conn());
-            db_.save_document(url, content, txn);
-            pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
-            if (r.empty()) {
-                std::cerr << "No document found with URL: " << url << std::endl;
-                txn.commit();
-                continue;
-            }
-            int document_id = r[0][0].as<int>();
-            std::map<std::string, int> word_freq;
-            std::istringstream iss(content);
-            std::string word;
-            while (iss >> word) {
-                if (word.length() >= 3 && word.length() <= 32) {
-                    word_freq[word]++;
-                }
-            }
-            for (const auto& [word, freq] : word_freq) {
-                db_.save_word_frequency(document_id, word, freq, txn); 
-            txn.commit();
+            index_page(url, content);
         }
         catch (const std::exception& e) {
             std::cerr << "Exception while indexing page: " << e.what() << std::endl;
         }
     }
 }
+
 
 std::string Spider::fetch_page(const std::string& url) {
     try {
@@ -220,7 +203,7 @@ std::string Spider::fetch_page(const std::string& url) {
         if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
             auto location = res[http::field::location];
             if (!location.empty()) {
-                return fetch_page(std::string(location));
+                return fetch_page(std::string(location)); // Преобразование location в std::string
             }
             else {
                 std::cerr << "Redirected without a new location" << std::endl;
@@ -234,7 +217,7 @@ std::string Spider::fetch_page(const std::string& url) {
         }
 
         std::string page_content = boost::beast::buffers_to_string(res.body().data());
-        std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl; // первые 500 символов для отладки
+        std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl; // Показать первые 500 символов для отладки
         return page_content;
     }
     catch (std::exception& e) {
@@ -270,6 +253,87 @@ std::vector<std::string> Spider::extract_links(const std::string& content) {
 
     return links;
 }
+
+void Spider::index_page(const std::string& url, const std::string& content) {
+    try {
+        if (content.empty()) {
+            std::cerr << "Empty content for URL: " << url << std::endl;
+            return;
+        }
+
+        // Инициализация локали
+        boost::locale::generator gen;
+        std::locale loc = gen("");
+        std::locale::global(loc);
+        std::cout.imbue(loc);
+
+        // Преобразование строки в UTF-8
+        std::string utf8_content = boost::locale::conv::to_utf<char>(content, "UTF-8");
+        std::string text = boost::locale::to_lower(utf8_content);
+
+        // Удаление HTML тегов и специальных символов
+        text = std::regex_replace(text, std::regex("<[^>]*>"), " ");
+        text = std::regex_replace(text, std::regex("[^\\w\\s]"), " ");
+
+        std::map<std::string, int> word_freq;
+        std::istringstream iss(text);
+        std::string word;
+        while (iss >> word) {
+            if (word.length() >= 3 && word.length() <= 32) {
+                word_freq[word]++;
+            }
+        }
+
+        // Сохранение документа
+        {
+            std::cout << "Starting transaction for URL: " << url << std::endl;
+            pqxx::work txn(db_.conn());
+            db_.save_document(url, content, txn);
+            txn.commit();
+            std::cout << "Transaction committed for URL: " << url << std::endl;
+        }
+
+        pqxx::work txn(db_.conn());
+        pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
+        if (r.empty()) {
+            std::cerr << "No document found with URL: " << url << std::endl;
+            txn.commit();
+            return;
+        }
+
+        int document_id;
+        try {
+            document_id = r[0][0].as<int>();
+        }
+        catch (const std::bad_cast& e) {
+            std::cerr << "Bad cast error: " << e.what() << std::endl;
+            txn.commit();
+            return;
+        }
+
+        // Сохранение частоты слов
+        for (const auto& [word, freq] : word_freq) {
+            db_.save_word_frequency(document_id, word, freq, txn);
+        }
+
+        // Коммитим транзакцию
+        txn.commit();
+        std::cout << "Transaction committed for URL: " << url << std::endl;
+        std::cout << "Document saved for URL: " << url << std::endl;
+    }
+    catch (const pqxx::sql_error& e) {
+        std::cerr << "SQL error: " << e.what() << std::endl;
+        std::cerr << "Query was: " << e.query() << std::endl;
+    }
+    catch (const std::bad_cast& e) {
+        std::cerr << "Bad cast error: " << e.what() << std::endl;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Exception: " << e.what() << std::endl;
+    }
+}
+
+
 
 std::string Spider::ensure_scheme(const std::string& url) {
     if (url.find("http://") == 0 || url.find("https://") == 0) {
