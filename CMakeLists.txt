@@ -5,17 +5,17 @@ project(SearchEngine)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Укажите путь к vcpkg toolchain
+# Путь к vcpkg toolchain
 set(CMAKE_TOOLCHAIN_FILE "C:/Users/alexr/Desktop/Search_Engine/vcpkg/scripts/buildsystems/vcpkg.cmake")
 
 # Найти пакеты Boost, libpqxx и OpenSSL
 find_package(Boost REQUIRED COMPONENTS system filesystem regex locale)
-find_package(libpqxx CONFIG REQUIRED)
+find_package(libpqxx REQUIRED)
 find_package(OpenSSL REQUIRED)
+
 
 # Установка путей к заголовочным файлам и библиотекам Boost
 include_directories(${Boost_INCLUDE_DIRS})
-link_directories(${Boost_LIBRARY_DIRS})
 
 # Установка путей к исходным файлам и заголовочным файлам
 set(SOURCES
