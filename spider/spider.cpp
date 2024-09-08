@@ -73,7 +73,6 @@ void Spider::start() {
     std::cout << "Spider finished." << std::endl;
 }
 
-
 void Spider::worker_thread() {
     active_threads_++;
     while (true) {
@@ -152,7 +151,6 @@ void Spider::worker_thread() {
         }
     }
 }
-
 
 std::string Spider::fetch_page(const std::string& url) {
     try {
@@ -286,13 +284,13 @@ void Spider::index_page(const std::string& url, const std::string& content) {
 
         // Сохранение документа
         {
-            std::cout << "Starting transaction for URL: " << url << std::endl;
-            pqxx::work txn(db_.conn());
+            pqxx::work txn(db_.conn()); // Обязательно открываем транзакцию в отдельном блоке
             db_.save_document(url, content, txn);
             txn.commit();
-            std::cout << "Transaction committed for URL: " << url << std::endl;
+            std::cout << "Document saved for URL: " << url << std::endl;
         }
 
+        // Получение ID документа и сохранение частоты слов
         pqxx::work txn(db_.conn());
         pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
         if (r.empty()) {
@@ -311,15 +309,12 @@ void Spider::index_page(const std::string& url, const std::string& content) {
             return;
         }
 
-        // Сохранение частоты слов
         for (const auto& [word, freq] : word_freq) {
             db_.save_word_frequency(document_id, word, freq, txn);
         }
 
-        // Коммитим транзакцию
         txn.commit();
         std::cout << "Transaction committed for URL: " << url << std::endl;
-        std::cout << "Document saved for URL: " << url << std::endl;
     }
     catch (const pqxx::sql_error& e) {
         std::cerr << "SQL error: " << e.what() << std::endl;
@@ -332,7 +327,6 @@ void Spider::index_page(const std::string& url, const std::string& content) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 }
-
 
 
 std::string Spider::ensure_scheme(const std::string& url) {
