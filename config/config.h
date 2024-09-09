@@ -12,7 +12,7 @@ struct Config {
     std::string start_url;
     int recursion_depth;
     int server_port;
-    int thread_count;
+    int thread_count = 4;
 };
 
 Config read_config(const std::string& filename);
