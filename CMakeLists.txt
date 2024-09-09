@@ -2,8 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(SearchEngine)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_definitions(-D_WIN32_WINNT=0x0601)
 
 # Путь к vcpkg toolchain
 set(CMAKE_TOOLCHAIN_FILE "C:/Users/alexr/Desktop/Search_Engine/vcpkg/scripts/buildsystems/vcpkg.cmake")
@@ -26,6 +28,8 @@ set(SOURCES
     database/database.cpp
     spider/spider.h
     spider/spider.cpp
+    search_engine/search_engine.h
+    search_engine/search_engine.cpp
 )
 
 # Создание исполняемого файла
