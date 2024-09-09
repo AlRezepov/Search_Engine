@@ -17,7 +17,7 @@
 class Spider {
 public:
     Spider(const Config& config, Database& db);
-    ~Spider(); // Добавлен деструктор для корректного завершения потоков
+    ~Spider();
     void start();
 
 private:

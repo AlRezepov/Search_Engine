@@ -290,31 +290,27 @@ void Spider::index_page(const std::string& url, const std::string& content) {
 
         pqxx::work txn(db_.conn());
 
-        try {
-            // Save the document
+        try {            
             db_.save_document(url, content, txn);
 
-            // Retrieve document ID
             pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
             if (r.empty()) {
                 std::cerr << "Document not found for URL: " << url << std::endl;
-                txn.abort(); // Abort the transaction if the document was not found
+                txn.abort();
                 return;
             }
 
             int document_id = r[0][0].as<int>();
-
-            // Save word frequencies
+            
             for (const auto& [word, freq] : word_freq) {
                 db_.save_word_frequency(document_id, word, freq, txn);
             }
-
-            // Commit the transaction
+            
             txn.commit();
             std::cout << "Transaction committed for URL: " << url << std::endl;
         }
         catch (const std::exception& e) {
-            txn.abort(); // Ensure the transaction is aborted in case of an error
+            txn.abort();
             std::cerr << "Transaction error: " << e.what() << std::endl;
         }
     }

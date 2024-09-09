@@ -60,7 +60,7 @@ void SearchEngine::on_accept(beast::error_code ec, tcp::socket socket) {
     std::cout << "New connection accepted." << std::endl; // Отладочный вывод
     auto session = std::make_shared<Session>(std::move(socket), *this);
     session->run();
-    do_accept(); // Продолжаем принимать подключения
+    do_accept();
 }
 
 void SearchEngine::handle_get_request(const http::request<http::string_body>& req, std::shared_ptr<Session> session) {
@@ -87,11 +87,10 @@ void SearchEngine::handle_get_request(const http::request<http::string_body>& re
     res.body() = html;
     res.prepare_payload();
 
-    session->send_response(res); // Используем метод send_response
+    session->send_response(res);
 }
 
 void SearchEngine::handle_post_request(const http::request<http::string_body>& req, std::shared_ptr<Session> session) {
-    // Извлечение и декодирование тела запроса
     std::string query = req.body();
 
     // Преобразование в нижний регистр
