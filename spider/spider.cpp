@@ -58,7 +58,7 @@ void Spider::start() {
 
     {
         std::unique_lock<std::mutex> lock(queue_mutex_);
-        cv_.wait(lock, [this]() { return urls_.empty() && active_threads_ == 0; });
+        
     }
 
     stop_ = true;
@@ -73,8 +73,13 @@ void Spider::start() {
     std::cout << "Spider finished." << std::endl;
 }
 
+
 void Spider::worker_thread() {
-    active_threads_++;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        active_threads_++;
+    }
+
     while (true) {
         std::pair<std::string, int> task;
 
@@ -87,7 +92,8 @@ void Spider::worker_thread() {
                 if (active_threads_ == 0) {
                     cv_.notify_all();
                 }
-                return; // Завершаем поток, если stop_ установлен и нет URL для обработки
+                std::cout << "Worker thread exiting. Stop flag set and no more URLs." << std::endl;
+                return;
             }
 
             if (!urls_.empty()) {
@@ -259,17 +265,17 @@ void Spider::index_page(const std::string& url, const std::string& content) {
             return;
         }
 
-        // Инициализация локали
+        // Initialize locale
         boost::locale::generator gen;
         std::locale loc = gen("");
         std::locale::global(loc);
         std::cout.imbue(loc);
 
-        // Преобразование строки в UTF-8
+        // Convert string to UTF-8
         std::string utf8_content = boost::locale::conv::to_utf<char>(content, "UTF-8");
         std::string text = boost::locale::to_lower(utf8_content);
 
-        // Удаление HTML тегов и специальных символов
+        // Remove HTML tags and special characters
         text = std::regex_replace(text, std::regex("<[^>]*>"), " ");
         text = std::regex_replace(text, std::regex("[^\\w\\s]"), " ");
 
@@ -282,51 +288,45 @@ void Spider::index_page(const std::string& url, const std::string& content) {
             }
         }
 
-        // Сохранение документа
-        {
-            pqxx::work txn(db_.conn()); // Обязательно открываем транзакцию в отдельном блоке
-            db_.save_document(url, content, txn);
-            txn.commit();
-            std::cout << "Document saved for URL: " << url << std::endl;
-        }
-
-        // Получение ID документа и сохранение частоты слов
         pqxx::work txn(db_.conn());
-        pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
-        if (r.empty()) {
-            std::cerr << "No document found with URL: " << url << std::endl;
-            txn.commit();
-            return;
-        }
 
-        int document_id;
         try {
-            document_id = r[0][0].as<int>();
-        }
-        catch (const std::bad_cast& e) {
-            std::cerr << "Bad cast error: " << e.what() << std::endl;
+            // Save the document
+            db_.save_document(url, content, txn);
+
+            // Retrieve document ID
+            pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
+            if (r.empty()) {
+                std::cerr << "Document not found for URL: " << url << std::endl;
+                txn.abort(); // Abort the transaction if the document was not found
+                return;
+            }
+
+            int document_id = r[0][0].as<int>();
+
+            // Save word frequencies
+            for (const auto& [word, freq] : word_freq) {
+                db_.save_word_frequency(document_id, word, freq, txn);
+            }
+
+            // Commit the transaction
             txn.commit();
-            return;
+            std::cout << "Transaction committed for URL: " << url << std::endl;
         }
-
-        for (const auto& [word, freq] : word_freq) {
-            db_.save_word_frequency(document_id, word, freq, txn);
+        catch (const std::exception& e) {
+            txn.abort(); // Ensure the transaction is aborted in case of an error
+            std::cerr << "Transaction error: " << e.what() << std::endl;
         }
-
-        txn.commit();
-        std::cout << "Transaction committed for URL: " << url << std::endl;
     }
     catch (const pqxx::sql_error& e) {
         std::cerr << "SQL error: " << e.what() << std::endl;
         std::cerr << "Query was: " << e.query() << std::endl;
     }
-    catch (const std::bad_cast& e) {
-        std::cerr << "Bad cast error: " << e.what() << std::endl;
-    }
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }
 }
+
 
 
 std::string Spider::ensure_scheme(const std::string& url) {
