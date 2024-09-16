@@ -123,13 +123,18 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
     }
 
     try {
+        // Устанавливаем search_path на схему 'search_engine'
+        pqxx::work txn_set_schema(conn_);
+        txn_set_schema.exec("SET search_path TO search_engine");
+        txn_set_schema.commit();
+
         pqxx::work txn(conn_);
 
-        // Формируем SQL-запрос
+        // Формируем SQL-запрос с сокращенным обращением
         std::string sql = "SELECT d.url, w.word, wf.frequency "
-            "FROM search_engine.documents d "
-            "JOIN search_engine.word_frequencies wf ON d.id = wf.document_id "
-            "JOIN search_engine.words w ON wf.word_id = w.id "
+            "FROM documents d "
+            "JOIN word_frequencies wf ON d.id = wf.document_id "
+            "JOIN words w ON wf.word_id = w.id "
             "WHERE LOWER(w.word) IN (";
 
         // Добавление слов в SQL-запрос
@@ -137,8 +142,7 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
             if (i > 0) sql += ",";
             sql += txn.quote(words[i]);
         }
-        sql += ") "
-            "ORDER BY d.url, w.word;";
+        sql += ") ORDER BY d.url, w.word;";
 
         std::cout << "Executing SQL query: " << sql << std::endl;
 
@@ -181,6 +185,7 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
         session->handle_error(http::status::internal_server_error, "Database query failed");
     }
 }
+
 
 
 Session::Session(tcp::socket socket, SearchEngine& search_engine)
