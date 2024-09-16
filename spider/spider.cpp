@@ -161,7 +161,7 @@ void Spider::worker_thread() {
 std::string Spider::fetch_page(const std::string& url) {
     try {
         net::io_context ioc;
-        ssl::context ctx(ssl::context::sslv23_client);
+        ssl::context ctx(ssl::context::tlsv12_client);  // Используем TLS
         ctx.set_default_verify_paths();
 
         auto const scheme_end = url.find("://");
@@ -190,12 +190,13 @@ std::string Spider::fetch_page(const std::string& url) {
             throw boost::system::system_error{ ec };
         }
 
+        // Устанавливаем соединение
         net::connect(stream.next_layer(), results.begin(), results.end());
         stream.handshake(ssl::stream_base::client);
 
         http::request<http::string_body> req{ http::verb::get, target, 11 };
         req.set(http::field::host, host);
-        req.set(http::field::user_agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+        req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
 
         http::write(stream, req);
 
@@ -207,7 +208,7 @@ std::string Spider::fetch_page(const std::string& url) {
         if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
             auto location = res[http::field::location];
             if (!location.empty()) {
-                return fetch_page(std::string(location)); // Преобразование location в std::string
+                return fetch_page(std::string(location));
             }
             else {
                 std::cerr << "Redirected without a new location" << std::endl;
@@ -229,6 +230,7 @@ std::string Spider::fetch_page(const std::string& url) {
         return "";
     }
 }
+
 
 std::vector<std::string> Spider::extract_links(const std::string& content) {
     std::vector<std::string> links;
