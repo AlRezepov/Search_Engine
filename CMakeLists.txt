@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-
 project(SearchEngine)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -15,28 +14,44 @@ find_package(Boost REQUIRED COMPONENTS system filesystem regex locale)
 find_package(libpqxx REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-
 # Установка путей к заголовочным файлам и библиотекам Boost
 include_directories(${Boost_INCLUDE_DIRS})
 
-# Установка путей к исходным файлам и заголовочным файлам
-set(SOURCES
-    main.cpp
-    config/config.h
+# Источники для Spider
+set(SPIDER_SOURCES
+    main_spider.cpp
     config/config.cpp
-    database/database.h
     database/database.cpp
-    spider/spider.h
     spider/spider.cpp
-    search_engine/search_engine.h
+)
+
+# Источники для Search Engine
+set(SEARCH_ENGINE_SOURCES
+    main_search_engine.cpp
+    config/config.cpp
+    database/database.cpp
     search_engine/search_engine.cpp
 )
 
-# Создание исполняемого файла
-add_executable(SearchEngine ${SOURCES})
+# Создание исполняемого файла для Spider
+add_executable(SpiderProgram ${SPIDER_SOURCES})
 
-# Линковка с библиотеками Boost, libpqxx и OpenSSL
-target_link_libraries(SearchEngine PRIVATE
+# Линковка с библиотеками для Spider
+target_link_libraries(SpiderProgram PRIVATE
+    Boost::system
+    Boost::filesystem
+    Boost::regex
+    Boost::locale
+    libpqxx::pqxx
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
+# Создание исполняемого файла для Search Engine
+add_executable(SearchEngineProgram ${SEARCH_ENGINE_SOURCES})
+
+# Линковка с библиотеками для Search Engine
+target_link_libraries(SearchEngineProgram PRIVATE
     Boost::system
     Boost::filesystem
     Boost::regex

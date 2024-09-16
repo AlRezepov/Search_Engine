@@ -92,10 +92,6 @@ int main() {
 
         spider.start();
         std::cout << "Spider finished." << std::endl;
-
-        std::cout << "Starting search engine server..." << std::endl;
-        SearchEngine search_engine(config);
-        search_engine.start();
     }
     catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
