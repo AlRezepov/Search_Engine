@@ -22,10 +22,20 @@ public:
 
 private:
     std::string fetch_page(const std::string& url);
-    std::vector<std::string> extract_links(const std::string& content);
+    std::vector<std::string> extract_links(const std::string& content, const std::string& base_url);
     void index_page(const std::string& url, const std::string& content);
     void worker_thread(); // Функция для работы потоков
     std::string ensure_scheme(const std::string& url);
+
+    // Добавляем структуры и функции для разбора и разрешения URL
+    struct UrlComponents {
+        std::string scheme;
+        std::string host;
+        std::string path;
+    };
+
+    UrlComponents parse_url(const std::string& url);
+    std::string resolve_url(const std::string& base_url, const std::string& link);
 
     Config config_;
     Database& db_;

@@ -58,7 +58,7 @@ void Spider::start() {
 
     {
         std::unique_lock<std::mutex> lock(queue_mutex_);
-        
+        // Здесь можно добавить условие ожидания завершения работы
     }
 
     stop_ = true;
@@ -72,7 +72,6 @@ void Spider::start() {
 
     std::cout << "Spider finished." << std::endl;
 }
-
 
 void Spider::worker_thread() {
     {
@@ -128,12 +127,14 @@ void Spider::worker_thread() {
         }
 
         std::cout << "Processing content for URL: " << url << std::endl;
-        std::cout << "Content snippet: " << content.substr(0, 1000) << "..." << std::endl;
+        // Закомментируем вывод большого объёма данных
+        // std::cout << "Content snippet: " << content.substr(0, 1000) << "..." << std::endl;
 
         if (depth < config_.recursion_depth) {
             std::vector<std::string> links;
             try {
-                links = extract_links(content);
+                // Передаем текущий URL как базовый
+                links = extract_links(content, url);
             }
             catch (const std::exception& e) {
                 std::cerr << "Exception while extracting links: " << e.what() << std::endl;
@@ -169,6 +170,7 @@ std::string Spider::fetch_page(const std::string& url) {
             throw std::invalid_argument("Invalid URL: missing scheme");
         }
 
+        auto const scheme = url.substr(0, scheme_end);
         auto const host_start = scheme_end + 3;
         auto const host_end = url.find('/', host_start);
         std::string host, target;
@@ -182,7 +184,7 @@ std::string Spider::fetch_page(const std::string& url) {
         }
 
         tcp::resolver resolver(ioc);
-        auto const results = resolver.resolve(host, "https");
+        auto const results = resolver.resolve(host, scheme);
 
         ssl::stream<tcp::socket> stream(ioc, ctx);
         if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
@@ -222,7 +224,8 @@ std::string Spider::fetch_page(const std::string& url) {
         }
 
         std::string page_content = boost::beast::buffers_to_string(res.body().data());
-        std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl; // Показать первые 500 символов для отладки
+        // Закомментируем вывод большого объёма данных
+        // std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl;
         return page_content;
     }
     catch (std::exception& e) {
@@ -231,8 +234,7 @@ std::string Spider::fetch_page(const std::string& url) {
     }
 }
 
-
-std::vector<std::string> Spider::extract_links(const std::string& content) {
+std::vector<std::string> Spider::extract_links(const std::string& content, const std::string& base_url) {
     std::vector<std::string> links;
     try {
         std::regex link_regex(R"(<a\s+(?:[^>]*?\s+)?href=["']([^"']*)["'])");
@@ -242,16 +244,17 @@ std::vector<std::string> Spider::extract_links(const std::string& content) {
         while (std::regex_search(search_start, content.cend(), match, link_regex)) {
             std::string link = match[1].str();
             if (link.empty() || link.find("javascript:") == 0) {
-                std::cerr << "Skipping invalid link: " << link << std::endl;
+                // std::cerr << "Skipping invalid link: " << link << std::endl;
                 search_start = match.suffix().first;
                 continue;
             }
-            std::cout << "Found link: " << link << std::endl;
-            links.push_back(link);
+            std::string absolute_link = resolve_url(base_url, link);
+            // std::cout << "Found link: " << link << " Resolved to: " << absolute_link << std::endl;
+            links.push_back(absolute_link);
             search_start = match.suffix().first;
         }
 
-        std::cout << "Total links found: " << links.size() << std::endl;
+        // std::cout << "Total links found: " << links.size() << std::endl;
     }
     catch (const std::exception& e) {
         std::cerr << "Exception in extract_links: " << e.what() << std::endl;
@@ -292,7 +295,7 @@ void Spider::index_page(const std::string& url, const std::string& content) {
 
         pqxx::work txn(db_.conn());
 
-        try {            
+        try {
             db_.save_document(url, content, txn);
 
             pqxx::result r = txn.exec_params("SELECT id FROM search_engine.documents WHERE url = $1", url);
@@ -303,13 +306,13 @@ void Spider::index_page(const std::string& url, const std::string& content) {
             }
 
             int document_id = r[0][0].as<int>();
-            
+
             for (const auto& [word, freq] : word_freq) {
                 db_.save_word_frequency(document_id, word, freq, txn);
             }
-            
+
             txn.commit();
-            std::cout << "Transaction committed for URL: " << url << std::endl;
+            // std::cout << "Transaction committed for URL: " << url << std::endl;
         }
         catch (const std::exception& e) {
             txn.abort();
@@ -325,11 +328,90 @@ void Spider::index_page(const std::string& url, const std::string& content) {
     }
 }
 
-
-
 std::string Spider::ensure_scheme(const std::string& url) {
     if (url.find("http://") == 0 || url.find("https://") == 0) {
         return url;
     }
     return "http://" + url;
+}
+
+// Реализация функции parse_url
+Spider::UrlComponents Spider::parse_url(const std::string& url) {
+    std::regex url_regex(R"(^((https?)://)?([^/]+)(/.*)?)");
+    std::smatch url_match_result;
+
+    if (std::regex_match(url, url_match_result, url_regex)) {
+        UrlComponents result;
+        result.scheme = url_match_result[2].str().empty() ? "http" : url_match_result[2].str();
+        result.host = url_match_result[3].str();
+        result.path = url_match_result[4].str();
+        if (result.path.empty()) {
+            result.path = "/";
+        }
+        return result;
+    }
+    else {
+        throw std::invalid_argument("Invalid URL: " + url);
+    }
+}
+
+// Реализация функции resolve_url
+std::string Spider::resolve_url(const std::string& base_url, const std::string& link) {
+    // Если ссылка уже является абсолютной, возвращаем её
+    if (link.find("http://") == 0 || link.find("https://") == 0) {
+        return link;
+    }
+    else if (link.find("//") == 0) {
+        // Протокольно-относительный URL
+        UrlComponents base = parse_url(base_url);
+        return base.scheme + ":" + link;
+    }
+    else if (link.find("/") == 0) {
+        // Абсолютный путь относительно хоста
+        UrlComponents base = parse_url(base_url);
+        return base.scheme + "://" + base.host + link;
+    }
+    else {
+        // Относительный путь
+        UrlComponents base = parse_url(base_url);
+        // Удаляем имя файла из базового пути, если оно есть
+        std::string base_path = base.path;
+        size_t pos = base_path.rfind('/');
+        if (pos != std::string::npos) {
+            base_path = base_path.substr(0, pos + 1);
+        }
+        else {
+            base_path = "/";
+        }
+        std::string combined_path = base_path + link;
+
+        // Нормализуем путь, обрабатывая "../" и "./"
+        std::vector<std::string> segments;
+        std::istringstream path_stream(combined_path);
+        std::string segment;
+        while (std::getline(path_stream, segment, '/')) {
+            if (segment == "..") {
+                if (!segments.empty()) {
+                    segments.pop_back();
+                }
+            }
+            else if (segment != "." && !segment.empty()) {
+                segments.push_back(segment);
+            }
+        }
+
+        // Восстанавливаем нормализованный путь
+        std::string normalized_path = "/";
+        for (size_t i = 0; i < segments.size(); ++i) {
+            normalized_path += segments[i];
+            if (i != segments.size() - 1) {
+                normalized_path += "/";
+            }
+        }
+        if (combined_path.back() == '/') {
+            normalized_path += "/";
+        }
+
+        return base.scheme + "://" + base.host + normalized_path;
+    }
 }
