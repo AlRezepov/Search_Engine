@@ -13,7 +13,7 @@
 #include <mutex>
 #include <queue>
 #include <condition_variable>
-#include <execution>  // Для std::execution::par
+#include <execution>
 
 namespace http = boost::beast::http;
 namespace net = boost::asio;
@@ -141,13 +141,18 @@ void Spider::worker_thread() {
                 continue;
             }
 
-            std::for_each(std::execution::par, links.begin(), links.end(), [this, depth](const std::string& link) {
+            for (const std::string& link : links) {
                 std::lock_guard<std::mutex> lock(queue_mutex_);
-                if (visited_.find(link) == visited_.end()) {
-                    urls_.emplace(link, depth + 1);
-                    cv_.notify_one();
+                {
+                    std::lock_guard<std::mutex> visited_lock(visited_mutex_);
+                    if (visited_.find(link) != visited_.end()) {
+                        continue;
+                    }
+                    visited_.insert(link);
                 }
-                });
+                urls_.emplace(link, depth + 1);
+                cv_.notify_one();
+            }
         }
 
         try {
@@ -186,53 +191,94 @@ std::string Spider::fetch_page(const std::string& url) {
         tcp::resolver resolver(ioc);
         auto const results = resolver.resolve(host, scheme);
 
-        ssl::stream<tcp::socket> stream(ioc, ctx);
-        if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
-            boost::system::error_code ec{ static_cast<int>(::ERR_get_error()), net::error::get_ssl_category() };
-            throw boost::system::system_error{ ec };
-        }
-
-        // Устанавливаем соединение
-        net::connect(stream.next_layer(), results.begin(), results.end());
-        stream.handshake(ssl::stream_base::client);
-
-        http::request<http::string_body> req{ http::verb::get, target, 11 };
-        req.set(http::field::host, host);
-        req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
-
-        http::write(stream, req);
-
-        boost::beast::flat_buffer buffer;
-        http::response<http::dynamic_body> res;
-
-        http::read(stream, buffer, res);
-
-        if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
-            auto location = res[http::field::location];
-            if (!location.empty()) {
-                return fetch_page(std::string(location));
+        if (scheme == "https") {
+            ssl::stream<tcp::socket> stream(ioc, ctx);
+            if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
+                boost::system::error_code ec{ static_cast<int>(::ERR_get_error()), net::error::get_ssl_category() };
+                throw boost::system::system_error{ ec };
             }
-            else {
-                std::cerr << "Redirected without a new location" << std::endl;
+
+            // Устанавливаем соединение
+            net::connect(stream.next_layer(), results.begin(), results.end());
+            stream.handshake(ssl::stream_base::client);
+
+            http::request<http::string_body> req{ http::verb::get, target, 11 };
+            req.set(http::field::host, host);
+            req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+
+            http::write(stream, req);
+
+            boost::beast::flat_buffer buffer;
+            http::response<http::dynamic_body> res;
+
+            http::read(stream, buffer, res);
+
+            if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
+                auto location = res[http::field::location];
+                if (!location.empty()) {
+                    return fetch_page(std::string(location));
+                }
+                else {
+                    std::cerr << "Redirected without a new location" << std::endl;
+                    return "";
+                }
+            }
+
+            if (res.result() != http::status::ok) {
+                std::cerr << "HTTP request failed: " << res.result_int() << " " << res.reason() << std::endl;
                 return "";
             }
-        }
 
-        if (res.result() != http::status::ok) {
-            std::cerr << "HTTP request failed: " << res.result_int() << " " << res.reason() << std::endl;
+            std::string page_content = boost::beast::buffers_to_string(res.body().data());
+            return page_content;
+        }
+        else if (scheme == "http") {
+            tcp::socket socket(ioc);
+
+            // Устанавливаем соединение
+            net::connect(socket, results.begin(), results.end());
+
+            http::request<http::string_body> req{ http::verb::get, target, 11 };
+            req.set(http::field::host, host);
+            req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+
+            http::write(socket, req);
+
+            boost::beast::flat_buffer buffer;
+            http::response<http::dynamic_body> res;
+
+            http::read(socket, buffer, res);
+
+            if (res.result() == http::status::moved_permanently || res.result() == http::status::found) {
+                auto location = res[http::field::location];
+                if (!location.empty()) {
+                    return fetch_page(std::string(location));
+                }
+                else {
+                    std::cerr << "Redirected without a new location" << std::endl;
+                    return "";
+                }
+            }
+
+            if (res.result() != http::status::ok) {
+                std::cerr << "HTTP request failed: " << res.result_int() << " " << res.reason() << std::endl;
+                return "";
+            }
+
+            std::string page_content = boost::beast::buffers_to_string(res.body().data());
+            return page_content;
+        }
+        else {
+            std::cerr << "Unsupported URL scheme: " << scheme << std::endl;
             return "";
         }
-
-        std::string page_content = boost::beast::buffers_to_string(res.body().data());
-        // Закомментируем вывод большого объёма данных
-        // std::cout << "Fetched page content: " << page_content.substr(0, 500) << "..." << std::endl;
-        return page_content;
     }
     catch (std::exception& e) {
         std::cerr << "Error fetching page: " << e.what() << std::endl;
         return "";
     }
 }
+
 
 std::vector<std::string> Spider::extract_links(const std::string& content, const std::string& base_url) {
     std::vector<std::string> links;
