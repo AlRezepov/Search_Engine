@@ -12,6 +12,9 @@ public:
     void save_word_frequency(int document_id, const std::string& word, int frequency, pqxx::work& txn);
     pqxx::connection& conn();
 
+    // Добавляем метод для создания таблиц
+    void create_tables();
+
 private:
     pqxx::connection conn_;
 };
