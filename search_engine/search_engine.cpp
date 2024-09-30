@@ -130,8 +130,8 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
 
         pqxx::work txn(conn_);
 
-        // Формируем SQL-запрос с сокращенным обращением
-        std::string sql = "SELECT d.url, w.word, wf.frequency "
+        // Формируем SQL-запрос
+        std::string sql = "SELECT d.url, SUM(wf.frequency) AS total_frequency "
             "FROM documents d "
             "JOIN word_frequencies wf ON d.id = wf.document_id "
             "JOIN words w ON wf.word_id = w.id "
@@ -142,7 +142,7 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
             if (i > 0) sql += ",";
             sql += txn.quote(words[i]);
         }
-        sql += ") ORDER BY d.url, w.word;";
+        sql += ") GROUP BY d.url ORDER BY total_frequency DESC;";
 
         std::cout << "Executing SQL query: " << sql << std::endl;
 
@@ -159,12 +159,11 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
             html += "<p>No results found.</p>";
         }
         else {
-            html += "<table border='1'><thead><tr><th>Word</th><th>URL</th><th>Frequency</th></tr></thead><tbody>";
+            html += "<table border='1'><thead><tr><th>URL</th><th>Total Frequency</th></tr></thead><tbody>";
             for (const auto& row : res) {
                 std::string url = row["url"].c_str();
-                std::string word = row["word"].c_str();
-                std::string frequency = row["frequency"].c_str();
-                html += "<tr><td>" + word + "</td><td><a href=\"" + url + "\">" + url + "</a></td><td>" + frequency + "</td></tr>";
+                std::string total_frequency = row["total_frequency"].c_str();
+                html += "<tr><td><a href=\"" + url + "\">" + url + "</a></td><td>" + total_frequency + "</td></tr>";
             }
             html += "</tbody></table>";
         }
@@ -185,8 +184,6 @@ void SearchEngine::handle_post_request(const http::request<http::string_body>& r
         session->handle_error(http::status::internal_server_error, "Database query failed");
     }
 }
-
-
 
 Session::Session(tcp::socket socket, SearchEngine& search_engine)
     : socket_(std::move(socket)), search_engine_(search_engine) {}
