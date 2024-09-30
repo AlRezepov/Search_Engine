@@ -143,15 +143,10 @@ void Spider::worker_thread() {
 
             for (const std::string& link : links) {
                 std::lock_guard<std::mutex> lock(queue_mutex_);
-                {
-                    std::lock_guard<std::mutex> visited_lock(visited_mutex_);
-                    if (visited_.find(link) != visited_.end()) {
-                        continue;
-                    }
-                    visited_.insert(link);
+                if (visited_.find(link) == visited_.end()) {
+                    urls_.emplace(link, depth + 1);
+                    cv_.notify_one();
                 }
-                urls_.emplace(link, depth + 1);
-                cv_.notify_one();
             }
         }
 
